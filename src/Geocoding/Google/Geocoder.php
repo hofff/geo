@@ -2,6 +2,13 @@
 
 namespace Hofff\Geo\Geocoding\Google;
 
+use GuzzleHttp\ClientInterface;
+use GuzzleHttp\Client;
+use GuzzleHttp\Psr7\Request;
+use Psr\Http\Message\RequestInterface;
+use GuzzleHttp\Psr7\Uri;
+use GuzzleHttp\Exception\TransferException;
+
 /**
  * @author Oliver Hoff <oliver@hofff.com>
  */
@@ -34,11 +41,19 @@ class Geocoder {
 	private $endpoint;
 
 	/**
-	 * @param string $key
+	 * @var ClientInterface
 	 */
-	public function __construct($key, $endpoint = null) {
+	private $endpoint;
+
+	/**
+	 * @param string $key
+	 * @param string $endpoint
+	 * @param ClientInterface $client
+	 */
+	public function __construct($key, $endpoint = null, ClientInterface $client = null) {
 		$this->key = $key === null ? null : (string) $key;
 		$this->endpoint = $endpoint === null ? self::DEFAULT_ENDPOINT : (string) $endpoint;
+		$this->client = $client ?: new Client;
 	}
 
 	/**
@@ -56,6 +71,13 @@ class Geocoder {
 	}
 
 	/**
+	 * @return ClientInterface
+	 */
+	public function getClient() {
+		return $this->client;
+	}
+
+	/**
 	 * @param Query $query
 	 * @throws \RuntimeException
 	 * @return LatLng
@@ -66,7 +88,7 @@ class Geocoder {
 		if(!$results) {
 			throw new \RuntimeException(sprintf(
 				'No results for query "%s"',
-				$this->buildRequestURL($query)
+				http_build_query($this->compileQueryStringParams($query))
 			));
 		}
 
@@ -79,23 +101,11 @@ class Geocoder {
 	 * @return array<Result>
 	 */
 	public function geocode(Query $query) {
-		$response = $this->execute($query);
-
-		if($response['status'] != self::STATUS_OK || $response['status'] != self::STATUS_ZERO_RESULTS) {
-			$msg = sprintf(
-				'Query to "%s" was unsuccessful with status "%s"',
-				$this->buildRequestURL($query),
-				$response['status']
-			);
-
-			isset($response['error_message']) && $msg .= ' (' . $response['error_message'] . ')';
-
-			throw new \RuntimeException($msg);
-		}
+		$content = $this->execute($query);
 
 		$results = [];
-		if(isset($response['results'])) {
-			foreach($response['results'] as $result) {
+		if(isset($content['results'])) {
+			foreach($content['results'] as $result) {
 				$results[] = new Result($result);
 			}
 		}
@@ -109,37 +119,37 @@ class Geocoder {
 	 * @return array
 	 */
 	public function execute(Query $query) {
-		$params = $this->compileParams($query);
-		$url = $this->getEndpoint() . '?' . http_build_query($params);
+		$request = $this->createRequest($query);
 
-		$response = file_get_contents($url);
-		if($response === false) {
-			throw new \RuntimeException(sprintf('Request to "%s" failed', $url));
+		try {
+			$response = $this->getClient()->send($request);
+		} catch(TransferException $e) {
+			throw new \RuntimeException('Geocoding request failed', 1, $e);
 		}
 
-		$response = json_decode($response, true);
-		if(!is_array($response)) {
-			throw new \RuntimeException(sprintf('Unreadable response for request to "%s"', $url));
+		$content = json_decode($response->getBody()->getContents(), true);
+		if(!is_array($content)) {
+			throw new \RuntimeException('Unreadable geocoding response');
 		}
 
-		return $response;
+		return $content;
 	}
 
 	/**
 	 * @param Query $query
-	 * @return string
+	 * @return RequestInterface
 	 */
-	public function buildRequestURL(Query $query) {
-		$params = $this->compileParams($query);
-		$url = $this->getEndpoint() . '?' . http_build_query($params);
-		return $url;
+	public function createRequest(Query $query) {
+		$params = $this->compileQueryStringParams($query);
+		$uri = $this->getEndpoint() . '?' . http_build_query($params);
+		return new Request('GET', $uri);;
 	}
 
 	/**
 	 * @param Query $query
 	 * @return array<string, string>
 	 */
-	public function compileParams(Query $query) {
+	public function compileQueryStringParams(Query $query) {
 		$params = [];
 
 		if(null !== $key = $this->getKey()) {
