@@ -43,7 +43,7 @@ class Geocoder {
 	/**
 	 * @var ClientInterface
 	 */
-	private $endpoint;
+	private $client;
 
 	/**
 	 * @param string $key
